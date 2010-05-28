@@ -191,25 +191,16 @@ namespace modauthopenid {
     }
   };
 
-  void get_extension_params(params_t& extparams, params_t& params) {
+  // gets the params, which are prefixed with 'openid.' and removes the prefix
+  void get_openid_params(params_t& openidparams, params_t& params) {
     map<string,string>::iterator iter;
-    extparams.reset_fields();
+    openidparams.reset_fields();
     for(iter = params.begin(); iter != params.end(); iter++) {
       string param_key(iter->first);
       vector<string> parts = explode(param_key, ".");
-      // if there is more than one "." in the param name then we're 
-      // dealing with an extension parameter
-      if(parts.size() > 2)
-	extparams[param_key] = params[param_key];
-    }
-  };
-
-  // for each key/value in params_one, set params_two[key] = value
-  void merge_params(params_t& params_one, params_t& params_two) {
-    map<string,string>::iterator iter;
-    for(iter = params_one.begin(); iter != params_one.end(); iter++) {
-      string param_key(iter->first);
-      params_two[param_key] = params_one[param_key];
+      if(!strncmp(param_key.c_str(), "openid.", strlen("openid."))) {
+	openidparams[param_key.substr(strlen("openid."))] = params[param_key];
+      }
     }
   };
 

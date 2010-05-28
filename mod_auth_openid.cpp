@@ -29,6 +29,17 @@ Created by bmuller <bmuller@butterfat.net>
 
 extern "C" module AP_MODULE_DECLARE_DATA authopenid_module;
 
+
+struct modauthopenid_ax_t {
+    std::string uri;
+    bool required;
+    int count;
+};
+typedef std::map<std::string, modauthopenid_ax_t> modauthopenid_ax_map;
+
+void modauthopenid_ax_map_cleanup(void* ptr) { delete (modauthopenid_ax_map*)ptr ; }
+
+
 typedef struct {
   const char *db_location;
   char *trust_root;
@@ -43,6 +54,7 @@ typedef struct {
   char *auth_program;
   char *cookie_path;
   bool use_auth_program;
+  modauthopenid_ax_map *attr;
 } modauthopenid_config;
 
 typedef const char *(*CMD_HAND_TYPE) ();
@@ -65,6 +77,8 @@ static void *create_modauthopenid_config(apr_pool_t *p, char *s) {
   newcfg->server_name = NULL;
   newcfg->auth_program = NULL;
   newcfg->use_auth_program = false;
+  newcfg->attr = new modauthopenid_ax_map;
+  apr_pool_cleanup_register(p, (void*)newcfg->attr, (apr_status_t(*)(void *))modauthopenid_ax_map_cleanup, apr_pool_cleanup_null) ;
   return (void *) newcfg;
 }
 
@@ -141,6 +155,25 @@ static const char *set_modauthopenid_auth_program(cmd_parms *parms, void *mconfi
   return NULL;
 } 
 
+static const char *set_modauthopenid_attribute_exchange_add(cmd_parms *parms, void *mconfig, const char *arg1, const char *arg2, const char *arg3) {
+    modauthopenid_config *s_cfg = (modauthopenid_config *) mconfig;
+    std::string alias = std::string(arg1);
+    std::string uri = std::string(arg2);
+    bool required = true;
+    if(arg3) {
+	std::string req = std::string(arg3);
+	//TODO: are there any other values, that should be interpreted as false?
+	required = (req!="false");
+    }
+
+    modauthopenid_ax_t attr;
+    attr.uri = uri;
+    attr.required = required;
+    attr.count = 1; //TODO: add support for count > 1
+    (*s_cfg->attr)[alias] = attr;
+    return NULL;
+}
+
 static const command_rec mod_authopenid_cmds[] = {
   AP_INIT_TAKE1("AuthOpenIDCookieLifespan", (CMD_HAND_TYPE) set_modauthopenid_cookie_lifespan, NULL, OR_AUTHCFG,
 		"AuthOpenIDCookieLifespan <number seconds>"),
@@ -166,8 +199,11 @@ static const command_rec mod_authopenid_cmds[] = {
 		"AuthOpenIDServerName <server name and port prefix>"),
   AP_INIT_TAKE1("AuthOpenIDUserProgram", (CMD_HAND_TYPE) set_modauthopenid_auth_program, NULL, OR_AUTHCFG,
 		"AuthOpenIDUserProgram <full path to authentication program>"),
+  AP_INIT_TAKE23("AuthOpenIDAXAdd", (CMD_HAND_TYPE) set_modauthopenid_attribute_exchange_add, NULL, OR_AUTHCFG,
+		 "AuthOpenIDAXAdd <alias> <uri> <required(default=true)>"),
   {NULL}
 };
+
 
 // Get the full URI of the request_rec's request location 
 // clean_params specifies whether or not all openid.* and modauthopenid.* params should be cleared
@@ -276,6 +312,13 @@ static bool has_valid_session(request_rec *r, modauthopenid_config *s_cfg) {
       if(valid_path == uri_path.substr(0, valid_path.size()) && apr_strnatcmp(session.hostname.c_str(), r->hostname)==0) {
 	modauthopenid::debug("setting REMOTE_USER to \"" + std::string(session.identity) + "\"");
 	r->user = apr_pstrdup(r->pool, std::string(session.identity).c_str());
+
+	// set the session-env_vars
+	for(std::map<std::string,std::string>::const_iterator it = session.env_vars.begin(); it != session.env_vars.end(); ++it) {
+	  std::string key = it->first;
+	  std::string val = it->second;
+	  apr_table_set(r->subprocess_env, apr_pstrdup(r->pool, key.c_str()), apr_pstrdup(r->pool, val.c_str()));
+	}
 	return true;
       } else {
 	modauthopenid::debug("session found for different path or hostname");
@@ -289,12 +332,9 @@ static bool has_valid_session(request_rec *r, modauthopenid_config *s_cfg) {
 static int start_authentication_session(request_rec *r, modauthopenid_config *s_cfg, opkele::params_t& params, 
 					std::string& return_to, std::string& trust_root) {
   // remove all openid GET query params (openid.*) - we don't want that maintained through
-  // the redirection process.  We do, however, want to keep all aother GET params.
+  // the redirection process.  We do, however, want to keep all other GET params.
   // also, add a nonce for security 
   std::string identity = params.get_param("openid_identifier");
-  // pull out the extension parameters before we get rid of openid.*
-  opkele::params_t ext_params;
-  modauthopenid::get_extension_params(ext_params, params);
   modauthopenid::remove_openid_vars(params);
 
   // add a nonce and reset what return_to is
@@ -309,8 +349,14 @@ static int start_authentication_session(request_rec *r, modauthopenid_config *s_
   try {
     consumer.initiate(identity);
     opkele::openid_message_t cm; 
-    re_direct = consumer.checkid_(cm, opkele::mode_checkid_setup, return_to, trust_root).append_query(consumer.get_endpoint().uri);
-    re_direct = ext_params.append_query(re_direct, "");
+
+    opkele::ax_t ax;
+    for(modauthopenid_ax_map::const_iterator it = (*s_cfg->attr).begin(); it != (*s_cfg->attr).end(); ++it) {
+      const modauthopenid_ax_t attr = it->second;
+      ax.add_attribute(attr.uri.c_str(), attr.required, NULL, attr.count);
+    }
+
+    re_direct = consumer.checkid_(cm, opkele::mode_checkid_setup, return_to, trust_root, &ax).append_query(consumer.get_endpoint().uri);
   } catch (opkele::failed_xri_resolution &e) {
     consumer.close();
     return show_input(r, s_cfg, modauthopenid::invalid_id);
@@ -332,7 +378,7 @@ static int start_authentication_session(request_rec *r, modauthopenid_config *s_
 };
 
 
-static int set_session_cookie(request_rec *r, modauthopenid_config *s_cfg, opkele::params_t& params, std::string identity) {
+static int set_session_cookie(request_rec *r, modauthopenid_config *s_cfg, opkele::params_t& params, std::string identity, std::map<std::string,std::string>& env_vars) {
   // now set auth cookie, if we're doing session based auth
   std::string session_id, hostname, path, cookie_value, redirect_location, args;
   if(s_cfg->cookie_path != NULL) 
@@ -345,15 +391,13 @@ static int set_session_cookie(request_rec *r, modauthopenid_config *s_cfg, opkel
   apr_table_set(r->err_headers_out, "Set-Cookie", cookie_value.c_str());
   hostname = std::string(r->hostname);
 
+
   // save session values
   modauthopenid::SessionManager sm(std::string(s_cfg->db_location));
-  sm.store_session(session_id, hostname, path, identity, s_cfg->cookie_lifespan);
+  sm.store_session(session_id, hostname, path, identity, env_vars, s_cfg->cookie_lifespan);
   sm.close();
 
-  opkele::params_t ext_params;
-  modauthopenid::get_extension_params(ext_params, params);
   modauthopenid::remove_openid_vars(params);
-  modauthopenid::merge_params(ext_params, params);
   args = params.append_query("", "").substr(1);
   if(args.length() == 0)
     r->args = NULL;
@@ -363,6 +407,7 @@ static int set_session_cookie(request_rec *r, modauthopenid_config *s_cfg, opkel
   return modauthopenid::http_redirect(r, redirect_location);
 };
 
+
 static int validate_authentication_session(request_rec *r, modauthopenid_config *s_cfg, opkele::params_t& params, std::string& return_to) {
   // make sure nonce is present
   if(!params.has_param("modauthopenid.nonce")) 
@@ -370,7 +415,10 @@ static int validate_authentication_session(request_rec *r, modauthopenid_config 
 
   modauthopenid::MoidConsumer consumer(std::string(s_cfg->db_location), params.get_param("modauthopenid.nonce"), return_to);
   try {
-    consumer.id_res(modauthopenid::modauthopenid_message_t(params));
+    opkele::ax_t ax;
+    opkele::params_t openidparams;
+    modauthopenid::get_openid_params(openidparams, params);
+    consumer.id_res(openidparams, &ax);
     
     // if no exception raised, check nonce
     if(!consumer.session_exists()) {
@@ -390,12 +438,27 @@ static int validate_authentication_session(request_rec *r, modauthopenid_config 
     consumer.kill_session();
     consumer.close();
 
+    // Read out all requested ax-attributes and prepare them for storage in env_vars
+    std::map<std::string, std::string> env_vars;
+    for(modauthopenid_ax_map::const_iterator it = (*s_cfg->attr).begin(); it != (*s_cfg->attr).end(); ++it) {
+      const modauthopenid_ax_t attr = it->second;
+      std::string key = it->first;
+      std::string val = ax.get_attribute(attr.uri.c_str());
+      env_vars[key] = val;
+    }
+
     if(s_cfg->use_cookie) 
-      return set_session_cookie(r, s_cfg, params, identity);
+      return set_session_cookie(r, s_cfg, params, identity, env_vars);
       
     // if we're not setting cookie - don't redirect, just show page
     modauthopenid::debug("setting REMOTE_USER to \"" + identity + "\"");
     r->user = apr_pstrdup(r->pool, identity.c_str());
+    // set the session-env_vars
+    for(std::map<std::string,std::string>::const_iterator it = env_vars.begin(); it != env_vars.end(); ++it) {
+      std::string key = it->first;
+      std::string val = it->second;
+      apr_table_set(r->subprocess_env, apr_pstrdup(r->pool, key.c_str()), apr_pstrdup(r->pool, val.c_str()));
+    }
     return DECLINED;
   } catch(opkele::exception &e) {
     modauthopenid::debug("Error in authentication: " + std::string(e.what()));

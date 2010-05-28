@@ -38,25 +38,9 @@ namespace modauthopenid {
     string path;
     string identity;
     int expires_on; // exact moment it expires
+    map<string, string> env_vars;
   } session_t;
 
-  // Wrapper for basic_openid_message - just so it works with openid namespace
-  class modauthopenid_message_t : public params_t {
-  public:
-    modauthopenid_message_t(params_t& _bom) { bom = _bom; };
-    bool has_field(const string& n) const { return bom.has_param("openid."+n); };
-    const string& get_field(const string& n) const { return bom.get_param("openid."+n); };
-    bool has_ns(const string& uri) const { return bom.has_ns(uri); };
-    string get_ns(const string& uri) const { return bom.get_ns(uri); };
-    fields_iterator fields_begin() const { return bom.fields_begin(); };
-    fields_iterator fields_end() const { return bom.fields_end(); };
-    void reset_fields() { bom.reset_fields(); };
-    void set_field(const string& n,const string& v) { bom.set_field(n, v); };
-    void reset_field(const string& n) { bom.reset_field(n); };
-
-  private:
-    params_t bom;
-  };
 
 }
 

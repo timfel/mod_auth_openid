@@ -56,6 +56,7 @@ Created by bmuller <bmuller@butterfat.net>
 #include <algorithm>
 #include <string>
 #include <vector>
+#include <map>
 
 /* opkele includes */
 #include <opkele/exception.h>
@@ -63,6 +64,7 @@ Created by bmuller <bmuller@butterfat.net>
 #include <opkele/util.h>
 #include <opkele/association.h>
 #include <opkele/prequeue_rp.h>
+#include <opkele/ax.h>
 
 /* overwrite package vars set by apache */
 #undef PACKAGE_BUGREPORT

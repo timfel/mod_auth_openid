@@ -37,15 +37,30 @@ namespace modauthopenid {
       return;
     sqlite3_busy_timeout(db, 5000);
     string query = "CREATE TABLE IF NOT EXISTS sessionmanager "
-      "(session_id VARCHAR(33), hostname VARCHAR(255), path VARCHAR(255), identity VARCHAR(255), expires_on INT)";
+      "(id INTEGER PRIMARY KEY, session_id VARCHAR(33), hostname VARCHAR(255), path VARCHAR(255), identity VARCHAR(255), expires_on INT)";
     rc = sqlite3_exec(db, query.c_str(), 0, 0, 0);
     test_result(rc, "problem creating table if it didn't exist already");
+
+    rc = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS session_id_index ON sessionmanager (session_id)", 0, 0, 0);
+    test_result(rc, "problem creating index if it didn't exist already");
+    rc = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS expires_on_index ON sessionmanager (expires_on)", 0, 0, 0);
+    test_result(rc, "problem creating index if it didn't exist already");
+
+    query = "CREATE TABLE IF NOT EXISTS env_vars "
+      "(sess_id INTEGER, expires_on INTEGER, key VARCHAR(25), value TEXT)";
+    rc = sqlite3_exec(db, query.c_str(), 0, 0, 0);
+    test_result(rc, "problem creating table if it didn't exist already");
+
+    rc = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS sess_id_index ON env_vars (sess_id)", 0, 0, 0);
+    test_result(rc, "problem creating index if it didn't exist already");
+    rc = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS expires_on_index ON env_vars (expires_on)", 0, 0, 0);
+    test_result(rc, "problem creating index if it didn't exist already");
   };
 
   void SessionManager::get_session(const string& session_id, session_t& session) {
     ween_expired();
-    const char *query = "SELECT session_id,hostname,path,identity,expires_on FROM sessionmanager WHERE session_id=%Q LIMIT 1";
-    char *sql = sqlite3_mprintf(query, session_id.c_str());
+    const char *q1 = "SELECT session_id,hostname,path,identity,expires_on FROM sessionmanager WHERE session_id=%Q LIMIT 1";
+    char *sql = sqlite3_mprintf(q1, session_id.c_str());
     int nr, nc;
     char **table;
     int rc = sqlite3_get_table(db, sql, &table, &nr, &nc, 0);
@@ -62,6 +77,17 @@ namespace modauthopenid {
       session.expires_on = strtol(table[9], 0, 0);
     }
     sqlite3_free_table(table);
+
+    const char *q2 = "SELECT e.key, e.value FROM env_vars as e, sessionmanager as s WHERE e.sess_id=s.id AND s.session_id=%Q";
+    sql = sqlite3_mprintf(q2, session_id.c_str());
+    debug(sql);
+    rc = sqlite3_get_table(db, sql, &table, &nr, &nc, 0);
+    sqlite3_free(sql);
+    test_result(rc, "problem fetching env_vars for id " + session_id);
+    for(int i=0; i<nr; ++i) {
+      session.env_vars[string(table[(i+1)*2])] = string(table[(i+1)*2 + 1]);
+    }
+    sqlite3_free_table(table);
   };
 
   bool SessionManager::test_result(int result, const string& context) {
@@ -75,7 +101,7 @@ namespace modauthopenid {
     return true;
   };
 
-  void SessionManager::store_session(const string& session_id, const string& hostname, const string& path, const string& identity, int lifespan) {
+  void SessionManager::store_session(const string& session_id, const string& hostname, const string& path, const string& identity, const map<string,string>& env_vars, int lifespan) {
     ween_expired();
     time_t rawtime;
     time (&rawtime);
@@ -83,12 +109,25 @@ namespace modauthopenid {
     // lifespan will be 0 if not specified by user in config - so lasts as long as browser is open.  In this case, make it last for up to a day.
     int expires_on = (lifespan == 0) ? (rawtime + 86400) : (rawtime + lifespan);
 
-    const char* url = "INSERT INTO sessionmanager (session_id,hostname,path,identity,expires_on) VALUES(%Q,%Q,%Q,%Q,%d)";
-    char *query = sqlite3_mprintf(url, session_id.c_str(), hostname.c_str(), path.c_str(), identity.c_str(), expires_on);
+    const char* q1 = "INSERT INTO sessionmanager (session_id,hostname,path,identity,expires_on) VALUES(%Q,%Q,%Q,%Q,%d)";
+    char *query = sqlite3_mprintf(q1, session_id.c_str(), hostname.c_str(), path.c_str(), identity.c_str(), expires_on);
     debug(query);
     int rc = sqlite3_exec(db, query, 0, 0, 0);
     sqlite3_free(query);
-    test_result(rc, "problem inserting session into db");    
+    test_result(rc, "problem inserting session into db");
+
+    sqlite3_int64 sess_id = sqlite3_last_insert_rowid(db);
+    for(map<string,string>::const_iterator it = env_vars.begin(); it != env_vars.end(); ++it) {
+      std::string key = it->first;
+      std::string val = it->second;
+
+      const char* q2 = "INSERT INTO env_vars (sess_id,expires_on,key,value) VALUES(%lld,%d,%Q,%Q)";
+      char *query = sqlite3_mprintf(q2, sess_id, expires_on, key.c_str(), val.c_str() );
+      debug(query);
+      int rc = sqlite3_exec(db, query, 0, 0, 0);
+      sqlite3_free(query);
+      test_result(rc, "problem inserting env_vars into db");
+    }
   };
 
   void SessionManager::ween_expired() {
@@ -98,6 +137,11 @@ namespace modauthopenid {
     int rc = sqlite3_exec(db, query, 0, 0, 0);
     sqlite3_free(query);
     test_result(rc, "problem weening expired sessions from table");
+
+    query = sqlite3_mprintf("DELETE FROM env_vars WHERE %d > expires_on", rawtime);
+    rc = sqlite3_exec(db, query, 0, 0, 0);
+    sqlite3_free(query);
+    test_result(rc, "problem weening expired env_vars from table");
   };
 
   // This is a method to be used by a utility program, never the apache module                 

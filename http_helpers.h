@@ -63,12 +63,9 @@ namespace modauthopenid {
   // create the cookie string that will be sent out in a header
   void make_cookie_value(string& cookie_value, const string& name, const string& session_id, const string& path, int cookie_lifespan);
 
-  // Get the extension parameters from the parameter list and put them in
-  // extparams
-  void get_extension_params(params_t &extparams, params_t &params);
-
-  // for each key/value in params_one, set params_two[key] = value
-  void merge_params(params_t& params_one, params_t& params_two);
+  // Get the 'openid.' parameters from the parameter list, strip 'openid.'
+  // and put them in openidparams
+  void get_openid_params(params_t &openidparams, params_t &params);
 
   // Get request parameters - whether POST or GET
   void get_request_params(request_rec *r, params_t& params);
