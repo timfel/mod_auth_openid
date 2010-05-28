@@ -101,28 +101,23 @@ namespace modauthopenid {
     return true;
   };
 
-  void SessionManager::store_session(const string& session_id, const string& hostname, const string& path, const string& identity, const map<string,string>& env_vars, int lifespan) {
+  void SessionManager::store_session(const session_t& session) {
     ween_expired();
-    time_t rawtime;
-    time (&rawtime);
-
-    // lifespan will be 0 if not specified by user in config - so lasts as long as browser is open.  In this case, make it last for up to a day.
-    int expires_on = (lifespan == 0) ? (rawtime + 86400) : (rawtime + lifespan);
 
     const char* q1 = "INSERT INTO sessionmanager (session_id,hostname,path,identity,expires_on) VALUES(%Q,%Q,%Q,%Q,%d)";
-    char *query = sqlite3_mprintf(q1, session_id.c_str(), hostname.c_str(), path.c_str(), identity.c_str(), expires_on);
+    char *query = sqlite3_mprintf(q1, session.session_id.c_str(), session.hostname.c_str(), session.path.c_str(), session.identity.c_str(), session.expires_on);
     debug(query);
     int rc = sqlite3_exec(db, query, 0, 0, 0);
     sqlite3_free(query);
     test_result(rc, "problem inserting session into db");
 
     sqlite3_int64 sess_id = sqlite3_last_insert_rowid(db);
-    for(map<string,string>::const_iterator it = env_vars.begin(); it != env_vars.end(); ++it) {
+    for(map<string,string>::const_iterator it = session.env_vars.begin(); it != session.env_vars.end(); ++it) {
       std::string key = it->first;
       std::string val = it->second;
 
       const char* q2 = "INSERT INTO env_vars (sess_id,expires_on,key,value) VALUES(%lld,%d,%Q,%Q)";
-      char *query = sqlite3_mprintf(q2, sess_id, expires_on, key.c_str(), val.c_str() );
+      char *query = sqlite3_mprintf(q2, sess_id, session.expires_on, key.c_str(), val.c_str() );
       debug(query);
       int rc = sqlite3_exec(db, query, 0, 0, 0);
       sqlite3_free(query);

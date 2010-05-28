@@ -41,9 +41,7 @@ namespace modauthopenid {
     void get_session(const string& session_id, session_t& session);
 
     // store given session information in a new session entry
-    // if lifespan is 0, let it expire in a day.  otherwise, expire in "lifespan" seconds
-    // See issue 16 - http://trac.butterfat.net/public/mod_auth_openid/ticket/16
-    void store_session(const string& session_id, const string& hostname, const string& path, const string& identity, const map<string,string>& env_vars, int lifespan);
+    void store_session(const session_t& session);
 
     // print session table to stdout
     void print_table();

@@ -393,8 +393,23 @@ static int set_session_cookie(request_rec *r, modauthopenid_config *s_cfg, opkel
 
 
   // save session values
+  modauthopenid::session_t session;
+  session.session_id = session_id;
+  session.hostname = hostname;
+  session.path = path;
+  session.identity = identity;
+  session.env_vars = env_vars;
+  // lifespan will be 0 if not specified by user in config - so lasts as long as browser is open.  In this case, make it last for up to a day.
+  // See issue 16 - http://trac.butterfat.net/public/mod_auth_openid/ticket/16
+  time_t rawtime;
+  time (&rawtime);
+  if(s_cfg->cookie_lifespan == 0)
+    session.expires_on = rawtime + 86400;
+  else
+    session.expires_on = rawtime + s_cfg->cookie_lifespan;
+
   modauthopenid::SessionManager sm(std::string(s_cfg->db_location));
-  sm.store_session(session_id, hostname, path, identity, env_vars, s_cfg->cookie_lifespan);
+  sm.store_session(session);
   sm.close();
 
   modauthopenid::remove_openid_vars(params);
